@@ -229,6 +229,7 @@ class BookScanner {
                 bookId: media.id,
                 authorId: existingAuthorId
               })
+              libraryScan.authorsNumBooksChangedIds.add(existingAuthorId)
               libraryScan.addLog(LogLevel.DEBUG, `Updating book "${bookMetadata.title}" added author "${authorName}"`)
               authorsUpdated = true
             } else {
@@ -239,6 +240,7 @@ class BookScanner {
               })
               await media.addAuthor(newAuthor)
               Database.addAuthorToFilterData(libraryItemData.libraryId, newAuthor.name, newAuthor.id)
+              SocketAuthority.emitter('author_added', newAuthor.toOldJSON())
               libraryScan.addLog(LogLevel.DEBUG, `Updating book "${bookMetadata.title}" added new author "${authorName}"`)
               authorsUpdated = true
             }
@@ -248,6 +250,7 @@ class BookScanner {
         for (const author of media.authors) {
           if (!bookMetadata.authors.includes(author.name)) {
             await author.bookAuthor.destroy()
+            libraryScan.authorsNumBooksChangedIds.add(author.id)
             libraryScan.addLog(LogLevel.DEBUG, `Updating book "${bookMetadata.title}" removed author "${author.name}"`)
             authorsUpdated = true
             bookAuthorsRemoved.push(author.id)
@@ -479,6 +482,7 @@ class BookScanner {
     }
 
     const createdAtTimestamp = new Date().getTime()
+    const newAuthorNames = new Set()
     if (bookMetadata.authors.length) {
       for (const authorName of bookMetadata.authors) {
         const matchingAuthorId = await Database.getAuthorIdByName(libraryItemData.libraryId, authorName)
@@ -486,6 +490,8 @@ class BookScanner {
           bookObject.bookAuthors.push({
             authorId: matchingAuthorId
           })
+          // Existing author — only numBooks changes; batch emit at scan end
+          libraryScan.authorsNumBooksChangedIds.add(matchingAuthorId)
         } else {
           // New author
           bookObject.bookAuthors.push({
@@ -497,6 +503,7 @@ class BookScanner {
               lastFirst: Database.authorModel.getLastFirst(authorName)
             }
           })
+          newAuthorNames.add(authorName)
         }
       }
     }
@@ -594,6 +601,9 @@ class BookScanner {
       for (const ba of libraryItem.book.bookAuthors) {
         if (ba.author) {
           Database.addAuthorToFilterData(libraryItemData.libraryId, ba.author.name, ba.author.id)
+          if (newAuthorNames.has(ba.author.name)) {
+            SocketAuthority.emitter('author_added', ba.author.toOldJSON())
+          }
         }
       }
     }
@@ -898,6 +908,34 @@ class BookScanner {
         libraryScan.addLog(LogLevel.ERROR, `Failed to save json file at "${metadataFilePath}"`, error)
         return null
       })
+  }
+
+  /**
+   * Emit authors_num_books_updated for authors whose book count changed during a scan (linked or unlinked).
+   * Authors with no book links are omitted — orphans are handled by author_removed.
+   * @param {string} libraryId
+   * @param {import('./LibraryScan')|import('./ScanLogger')} scanLogger
+   * @returns {Promise}
+   */
+  async emitAuthorsNumBooksUpdated(libraryId, scanLogger) {
+    if (!scanLogger.authorsNumBooksChangedIds?.size) return
+
+    const authorIds = [...scanLogger.authorsNumBooksChangedIds]
+    scanLogger.authorsNumBooksChangedIds.clear()
+
+    const countsByAuthorId = await Database.bookAuthorModel.getCountsForAuthors(authorIds)
+
+    const authors = Object.entries(countsByAuthorId).map(([id, numBooks]) => ({
+      id,
+      numBooks
+    }))
+
+    if (!authors.length) return
+
+    SocketAuthority.emitter('authors_num_books_updated', {
+      libraryId,
+      authors
+    })
   }
 
   /**
