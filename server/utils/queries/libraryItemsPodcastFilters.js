@@ -187,6 +187,7 @@ module.exports = {
     podcastWhere.push(...userPermissionPodcastWhere.podcastWhere)
 
     const findOptions = {
+      ...Database.readQueryOptions,
       where: podcastWhere,
       replacements,
       distinct: true,
@@ -308,6 +309,7 @@ module.exports = {
     const userPermissionPodcastWhere = this.getUserPermissionPodcastWhereQuery(user)
 
     const findOptions = {
+      ...Database.readQueryOptions,
       where: podcastEpisodeWhere,
       replacements: userPermissionPodcastWhere.replacements,
       include: [

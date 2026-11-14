@@ -10,6 +10,7 @@ module.exports = {
    */
   async getAuthorsTotalCount(libraryId) {
     const authorsCount = await Database.authorModel.count({
+      ...Database.readQueryOptions,
       where: {
         libraryId: libraryId
       }
@@ -26,6 +27,7 @@ module.exports = {
    */
   async getAuthorsWithCount(libraryId, limit) {
     const authors = await Database.bookAuthorModel.findAll({
+      ...Database.readQueryOptions,
       include: [
         {
           model: Database.authorModel,
@@ -62,6 +64,7 @@ module.exports = {
   async search(libraryId, query, limit, offset) {
     const matchAuthor = query.matchExpression('name')
     const authors = await Database.authorModel.findAll({
+      ...Database.readQueryOptions,
       where: {
         [Sequelize.Op.and]: [Sequelize.literal(matchAuthor), { libraryId }]
       },

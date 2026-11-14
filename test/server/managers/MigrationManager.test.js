@@ -105,6 +105,7 @@ describe('MigrationManager', () => {
       expect(umzugStub.up.calledWith({ migrations: ['v1.1.1-migration.js', 'v1.2.0-migration.js'], rerun: 'ALLOW' })).to.be.true
       expect(fsCopyStub.calledOnce).to.be.true
       expect(fsCopyStub.calledWith(path.join(configPath, 'absdatabase.sqlite'), path.join(configPath, 'absdatabase.backup.sqlite'))).to.be.true
+      expect(sequelizeStub.query.withArgs('PRAGMA wal_checkpoint(TRUNCATE)').calledBefore(fsCopyStub)).to.be.true
       expect(fsRemoveStub.calledOnce).to.be.true
       expect(fsRemoveStub.calledWith(path.join(configPath, 'absdatabase.backup.sqlite'))).to.be.true
       expect(loggerInfoStub.calledWith(sinon.match('Migrations successfully applied'))).to.be.true

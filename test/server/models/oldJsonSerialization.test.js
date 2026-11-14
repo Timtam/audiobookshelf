@@ -2,6 +2,7 @@ const { expect } = require('chai')
 const { Sequelize } = require('sequelize')
 
 const Database = require('../../../server/Database')
+const libraryItemsBookFilters = require('../../../server/utils/queries/libraryItemsBookFilters')
 
 /**
  * Assert that `expanded` contains every key from `minified` with matching values.
@@ -153,6 +154,90 @@ describe('old JSON serialization', () => {
 
       expect(expanded).to.have.property('libraryFiles')
       expect(expanded.media.numEpisodes).to.equal(expanded.media.episodes.length)
+    })
+  })
+
+  describe('Books loaded without the large JSON columns', () => {
+    const fileMetadata = (filename, size) => ({ filename, ext: '.mp3', path: `/${filename}`, relPath: filename, size })
+
+    const include = (libraryItemAttributes) => [
+      { model: Database.libraryItemModel, required: true, ...(libraryItemAttributes ? { attributes: libraryItemAttributes } : {}) },
+      { model: Database.authorModel, through: { attributes: [] } },
+      { model: Database.seriesModel, through: { attributes: ['id', 'sequence'] } }
+    ]
+    const toMinifiedJSON = (books) =>
+      books.map((book) => {
+        const libraryItem = book.libraryItem
+        libraryItem.media = book
+        return libraryItem.toOldJSONMinified()
+      })
+    const loadFull = async () => toMinifiedJSON(await Database.bookModel.findAll({ include: include(), order: [['title', 'ASC']] }))
+    // The way libraryItemsBookFilters.getFilteredLibraryItems loads books
+    const loadMinified = async () => {
+      const books = await Database.bookModel.findAll({ attributes: { exclude: ['audioFiles', 'chapters'] }, include: include({ exclude: ['libraryFiles'] }), order: [['title', 'ASC']] })
+      expect(books[0].audioFiles).to.be.undefined
+      expect(books[0].libraryItem.libraryFiles).to.be.undefined
+      await libraryItemsBookFilters.loadMinifiedStats(books)
+      return toMinifiedJSON(books)
+    }
+
+    async function createBook(title, bookData, libraryFiles) {
+      const library = await Database.libraryModel.findOne({ where: { mediaType: 'book' } })
+      const folder = await Database.libraryFolderModel.findOne({ where: { libraryId: library.id } })
+      const book = await Database.bookModel.create({ title, tags: [], narrators: [], genres: [], ...bookData })
+      await Database.libraryItemModel.create({ libraryFiles, mediaId: book.id, mediaType: 'book', libraryId: library.id, libraryFolderId: folder.id })
+      return book
+    }
+
+    it('toOldJSONMinified is the same as for fully loaded books', async () => {
+      await createBook(
+        'Excluded track',
+        {
+          audioFiles: [
+            { index: 1, ino: '10', metadata: fileMetadata('a.mp3', 100) },
+            { index: 2, ino: '11', exclude: true, metadata: fileMetadata('b.mp3', 250) }
+          ],
+          chapters: [
+            { id: 0, start: 0, end: 10, title: 'One' },
+            { id: 1, start: 10, end: 20, title: 'Two' }
+          ]
+        },
+        [
+          { ino: '10', metadata: fileMetadata('a.mp3', 100) },
+          { ino: '11', metadata: fileMetadata('b.mp3', 250) },
+          { ino: '12', metadata: fileMetadata('cover.jpg', 5) }
+        ]
+      )
+      await createBook('Ebook only', { audioFiles: [], chapters: null, ebookFile: { ino: '20', ebookFormat: 'epub', metadata: fileMetadata('book.epub', 777) } }, [])
+      // The size is NaN, which is null in the JSON response
+      await createBook('Missing size', { audioFiles: [{ index: 1, ino: '30', metadata: { filename: 'c.mp3', path: '/c.mp3' } }], chapters: [] }, [])
+
+      const full = await loadFull()
+      const minified = await loadMinified()
+
+      expect(minified).to.have.length(4)
+      expect(JSON.stringify(minified)).to.equal(JSON.stringify(full))
+      const excludedTrack = minified.find((li) => li.media.metadata.title === 'Excluded track')
+      expect(excludedTrack.media).to.include({ numTracks: 1, numAudioFiles: 2, numChapters: 2, size: 350 })
+      expect(excludedTrack.numFiles).to.equal(3)
+    })
+
+    it('toOldJSONMinified uses the new values after a book or its library item was updated', async () => {
+      const book = await createBook('Changing', { audioFiles: [{ index: 1, ino: '40', metadata: fileMetadata('d.mp3', 10) }], chapters: [] }, [])
+      await loadMinified()
+
+      // updatedAt is what tells that the values in memory are outdated, set here because the test runs within a millisecond
+      const updatedAt = new Date(Date.now() + 1000)
+      const audioFiles = [...book.audioFiles, { index: 2, ino: '41', metadata: fileMetadata('e.mp3', 20) }]
+      await Database.bookModel.update({ audioFiles, updatedAt }, { where: { id: book.id }, silent: true })
+      await Database.libraryItemModel.update({ libraryFiles: [{ ino: '40', metadata: fileMetadata('d.mp3', 10) }], updatedAt }, { where: { mediaId: book.id }, silent: true })
+
+      const minified = await loadMinified()
+
+      expect(JSON.stringify(minified)).to.equal(JSON.stringify(await loadFull()))
+      const changing = minified.find((li) => li.media.metadata.title === 'Changing')
+      expect(changing.media).to.include({ numTracks: 2, numAudioFiles: 2, size: 30 })
+      expect(changing.numFiles).to.equal(1)
     })
   })
 })
