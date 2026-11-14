@@ -425,6 +425,9 @@ class BackupManager {
 
       Logger.error(`[BackupManager] Backup sqlite timed out`)
       reject('Backup timed out')
+    }).finally(() => {
+      // In WAL mode an open connection keeps the write-ahead log from being removed when the db is disconnected to apply a backup
+      db.close(() => {})
     })
   }
 

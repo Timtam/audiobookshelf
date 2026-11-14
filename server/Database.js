@@ -31,6 +31,11 @@ class Database {
 
     this.supportsUnaccent = false
     this.supportsUnicodeFoldings = false
+
+    // Query options to run a long running read only query on the read connection, e.g. Model.findAll({ ...Database.readQueryOptions, where })
+    this.readQueryOptions = {}
+    // Pragmas that are also set on the read connection
+    this.readConnectionPragmas = []
   }
 
   get models() {
@@ -202,6 +207,9 @@ class Database {
     Logger.info(`[Database] running ANALYZE`)
     await this.sequelize.query('ANALYZE')
     Logger.info(`[Database] ANALYZE completed`)
+
+    // Opened after ANALYZE because a connection only loads the table statistics once
+    await this.openReadConnection()
   }
 
   /**
@@ -235,8 +243,23 @@ class Database {
     // Helper function
     this.sequelize.uppercaseFirst = (str) => (str ? `${str[0].toUpperCase()}${str.substr(1)}` : '')
 
+    this.readQueryOptions = {}
+    this.readConnectionPragmas = []
+
     try {
       await this.sequelize.authenticate()
+
+      // node-sqlite3 blocks the event loop when a statement finishes while another one is still running on the same connection.
+      // In serialize mode the statements of a connection run one after another
+      const db = await this.sequelize.dialect.connectionManager.getConnection()
+      db.serialize()
+
+      // In WAL mode a connection can read while another one writes, which is what the read connection is for
+      const [[{ journal_mode: journalMode }]] = await this.sequelize.query(`PRAGMA journal_mode = ${process.env.SQLITE_JOURNAL_MODE || 'WAL'}`)
+      this.isWalMode = journalMode === 'wal'
+      if (this.isWalMode) {
+        await this.sequelize.query('PRAGMA synchronous = NORMAL')
+      }
 
       // Set SQLite pragmas from environment variables
       const allowedPragmas = [
@@ -253,6 +276,7 @@ class Database {
             await this.sequelize.query(`PRAGMA ${pragma.name} = ${value}`)
             const [result] = await this.sequelize.query(`PRAGMA ${pragma.name}`)
             Logger.debug(`[Database] "PRAGMA ${pragma.name}" query result:`, result)
+            this.readConnectionPragmas.push(`PRAGMA ${pragma.name} = ${value}`)
           } catch (error) {
             Logger.error(`[Database] Failed to set SQLite pragma ${pragma.name}`, error)
           }
@@ -274,14 +298,35 @@ class Database {
   }
 
   /**
-   * @param {string} extension paths to extension binary
+   * Open a second connection for long running read only queries (see readQueryOptions), so that other queries do not have to wait for them.
+   * Only in WAL mode, where reading does not block writes.
    */
-  async loadExtension(extension) {
+  async openReadConnection() {
+    if (!this.isWalMode) return
+
+    // Sequelize has one sqlite connection per uuid
+    const readQueryOptions = { uuid: 'read' }
+    const db = await this.sequelize.dialect.connectionManager.getConnection({ ...readQueryOptions })
+    db.serialize()
+    for (const pragma of this.readConnectionPragmas) {
+      await this.sequelize.query(pragma, { ...readQueryOptions })
+    }
+    if (process.env.NUSQLITE3_PATH) {
+      await this.loadExtension(process.env.NUSQLITE3_PATH, { ...readQueryOptions })
+    }
+    this.readQueryOptions = readQueryOptions
+  }
+
+  /**
+   * @param {string} extension paths to extension binary
+   * @param {Object} [connectionOptions] options of the connection to load the extension for, the default connection if not set
+   */
+  async loadExtension(extension, connectionOptions) {
     // This is a hack to get the db connection for loading extensions.
     // The proper way would be to use the 'afterConnect' hook, but that hook is never called for sqlite due to a bug in sequelize.
     // See https://github.com/sequelize/sequelize/issues/12487
     // This is not a public API and may break in the future.
-    const db = await this.sequelize.dialect.connectionManager.getConnection()
+    const db = await this.sequelize.dialect.connectionManager.getConnection(connectionOptions)
     if (typeof db?.loadExtension !== 'function') throw new Error('Failed to get db connection for loading extensions')
 
     Logger.info(`[Database] Loading extension ${extension}`)
