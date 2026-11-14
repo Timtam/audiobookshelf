@@ -98,6 +98,36 @@ describe('Database', () => {
     })
   })
 
+  describe('vacuum', () => {
+    beforeEach(async () => {
+      await Database.connect()
+      await Database.sequelize.query('CREATE TABLE test (value TEXT)')
+      await Database.sequelize.query(`INSERT INTO test (value) WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 2000) SELECT hex(randomblob(500)) FROM numbers`)
+    })
+
+    it('should give the unused space back when a large part of the database file is unused', async () => {
+      await Database.sequelize.query('DELETE FROM test WHERE rowid > 500')
+      await Database.sequelize.query('PRAGMA wal_checkpoint(TRUNCATE)')
+      const sizeBefore = nodeFs.statSync(Database.dbPath).size
+
+      await Database.vacuum()
+
+      expect(await getPragma('freelist_count')).to.equal(0)
+      expect(nodeFs.statSync(Database.dbPath).size).to.be.below(sizeBefore / 2)
+      const [[{ count }]] = await Database.sequelize.query('SELECT count(*) AS count FROM test')
+      expect(count).to.equal(500)
+    })
+
+    it('should not run VACUUM when only a small part of the database file is unused', async () => {
+      await Database.sequelize.query('DELETE FROM test WHERE rowid > 1950')
+      const querySpy = sinon.spy(Database.sequelize, 'query')
+
+      await Database.vacuum()
+
+      expect(querySpy.calledWith('VACUUM')).to.be.false
+    })
+  })
+
   describe('init', () => {
     it('should open the read connection after ANALYZE', async () => {
       // A connection only loads the table statistics once. With other statistics a query can return rows with equal sort keys in another order

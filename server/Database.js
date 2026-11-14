@@ -204,6 +204,8 @@ class Database {
 
     await this.loadData()
 
+    await this.vacuum()
+
     Logger.info(`[Database] running ANALYZE`)
     await this.sequelize.query('ANALYZE')
     Logger.info(`[Database] ANALYZE completed`)
@@ -294,6 +296,26 @@ class Database {
     } catch (error) {
       Logger.error(`[Database] Failed to connect to db`, error)
       return false
+    }
+  }
+
+  /**
+   * Run VACUUM to give unused space in the database file back to the file system.
+   * VACUUM rewrites the whole database file, so it is only run when at least 10% of the file is unused.
+   */
+  async vacuum() {
+    const [[{ freelist_count: numUnusedPages }]] = await this.sequelize.query('PRAGMA freelist_count')
+    const [[{ page_count: numPages }]] = await this.sequelize.query('PRAGMA page_count')
+    if (!numUnusedPages || numUnusedPages < numPages * 0.1) return
+
+    Logger.info(`[Database] running VACUUM (${numUnusedPages} of ${numPages} pages are unused)`)
+    try {
+      await this.sequelize.query('VACUUM')
+      // In WAL mode the database file is only truncated when the write-ahead log is written into it
+      await this.sequelize.query('PRAGMA wal_checkpoint(TRUNCATE)')
+      Logger.info(`[Database] VACUUM completed`)
+    } catch (error) {
+      Logger.error(`[Database] VACUUM failed`, error)
     }
   }
 
