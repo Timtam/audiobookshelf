@@ -187,6 +187,7 @@ module.exports = {
     podcastWhere.push(...userPermissionPodcastWhere.podcastWhere)
 
     const findOptions = {
+      ...Database.readQueryOptions,
       where: podcastWhere,
       replacements,
       distinct: true,

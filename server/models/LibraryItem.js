@@ -81,6 +81,8 @@ class LibraryItem extends Model {
     this.authorNamesFirstLast // Only used for sorting
     /** @type {string} */
     this.authorNamesLastFirst // Only used for sorting
+    /** @type {number} - set when loaded without libraryFiles */
+    this.numFiles
   }
 
   /**
@@ -957,7 +959,7 @@ class LibraryItem extends Model {
       isInvalid: !!this.isInvalid,
       mediaType: this.mediaType,
       media: this.media.toOldJSONMinified(),
-      numFiles: this.libraryFiles.length,
+      numFiles: this.numFiles ?? this.libraryFiles.length,
       size: this.size
     }
   }
