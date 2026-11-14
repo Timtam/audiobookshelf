@@ -22,6 +22,11 @@ class AbMergeManager {
 
     /** @type {Task[]} */
     this.pendingTasks = []
+
+    // An encode keeps the CPU and the disks busy for a long time
+    this.MAX_CONCURRENT_TASKS = 1
+    this.tasksRunning = []
+    this.tasksQueued = []
   }
 
   /**
@@ -98,7 +103,19 @@ class AbMergeManager {
       await fs.mkdir(taskData.itemCachePath)
     }
 
-    this.runAudiobookMerge(libraryItem, task, options || {})
+    // Added here so that a queued task is found and can be canceled
+    this.pendingTasks.push({
+      id: task.id,
+      task
+    })
+
+    if (this.tasksRunning.length >= this.MAX_CONCURRENT_TASKS) {
+      Logger.info(`[AbMergeManager] Queueing m4b encode for ${libraryItem.id}`)
+      this.tasksQueued.push({ libraryItem, task, encodingOptions: options || {} })
+    } else {
+      this.tasksRunning.push(task)
+      this.runAudiobookMerge(libraryItem, task, options || {})
+    }
   }
 
   /**
@@ -132,25 +149,19 @@ class AbMergeManager {
       return
     }
 
-    this.pendingTasks.push({
-      id: task.id,
-      task
-    })
-
-    const encodeFraction = 0.95
-    const embedFraction = 1 - encodeFraction
     try {
       const trackProgressMonitor = new TrackProgressMonitor(
         libraryItem.media.includedAudioFiles.map((t) => t.duration),
         (trackIndex) => SocketAuthority.adminEmitter('track_started', { libraryItemId: libraryItem.id, ino: task.data.inos[trackIndex] }),
         (trackIndex, progressInTrack, taskProgress) => {
           SocketAuthority.adminEmitter('track_progress', { libraryItemId: libraryItem.id, ino: task.data.inos[trackIndex], progress: progressInTrack })
-          SocketAuthority.adminEmitter('task_progress', { libraryItemId: libraryItem.id, progress: taskProgress * encodeFraction })
+          SocketAuthority.adminEmitter('task_progress', { libraryItemId: libraryItem.id, progress: taskProgress })
         },
         (trackIndex) => SocketAuthority.adminEmitter('track_finished', { libraryItemId: libraryItem.id, ino: task.data.inos[trackIndex] })
       )
-      task.data.ffmpeg = new Ffmpeg()
-      await ffmpegHelpers.mergeAudioFiles(libraryItem.media.includedAudioFiles, task.data.duration, task.data.itemCachePath, task.data.tempFilepath, encodingOptions, (progress) => trackProgressMonitor.update(progress), task.data.ffmpeg)
+      // Low priority so that the server stays responsive. Metadata and cover are embedded in the same ffmpeg run
+      task.data.ffmpeg = new Ffmpeg({ niceness: 10 })
+      await ffmpegHelpers.mergeAudioFiles(libraryItem.media.includedAudioFiles, task.data.duration, task.data.itemCachePath, task.data.tempFilepath, encodingOptions, (progress) => trackProgressMonitor.update(progress), task.data.ffmpeg, task.data.ffmetadataPath, task.data.coverPath)
       delete task.data.ffmpeg
       trackProgressMonitor.finish()
     } catch (error) {
@@ -161,38 +172,6 @@ class AbMergeManager {
         const taskFailedString = {
           text: 'Failed to merge audio files',
           key: 'MessageTaskFailedToMergeAudioFiles'
-        }
-        task.setFailed(taskFailedString)
-        this.removeTask(task, true)
-      }
-      return
-    }
-
-    // Write metadata to merged file
-    try {
-      task.data.ffmpeg = new Ffmpeg()
-      await ffmpegHelpers.addCoverAndMetadataToFile(
-        task.data.tempFilepath,
-        task.data.coverPath,
-        task.data.ffmetadataPath,
-        1,
-        'audio/mp4',
-        (progress) => {
-          Logger.debug(`[AbMergeManager] Embedding metadata progress: ${100 * encodeFraction + progress * embedFraction}`)
-          SocketAuthority.adminEmitter('task_progress', { libraryItemId: libraryItem.id, progress: 100 * encodeFraction + progress * embedFraction })
-        },
-        task.data.ffmpeg
-      )
-      delete task.data.ffmpeg
-    } catch (error) {
-      if (error.message === 'FFMPEG_CANCELED') {
-        Logger.info(`[AbMergeManager] Task cancelled ${task.id}`)
-      } else {
-        Logger.error(`[AbMergeManager] Failed to embed metadata in file "${task.data.tempFilepath}"`)
-        const taskFailedString = {
-          text: `Failed to embed metadata in file ${Path.basename(task.data.tempFilepath)}`,
-          key: 'MessageTaskFailedToEmbedMetadataInFile',
-          subs: [Path.basename(task.data.tempFilepath)]
         }
         task.setFailed(taskFailedString)
         this.removeTask(task, true)
@@ -296,6 +275,15 @@ class AbMergeManager {
     }
 
     TaskManager.taskFinished(task)
+
+    this.tasksRunning = this.tasksRunning.filter((t) => t.id !== task.id)
+    this.tasksQueued = this.tasksQueued.filter((queued) => queued.task.id !== task.id)
+    if (this.tasksRunning.length < this.MAX_CONCURRENT_TASKS && this.tasksQueued.length) {
+      Logger.info(`[AbMergeManager] Task finished and dequeueing next task. ${this.tasksQueued.length} tasks queued.`)
+      const nextTask = this.tasksQueued.shift()
+      this.tasksRunning.push(nextTask.task)
+      this.runAudiobookMerge(nextTask.libraryItem, nextTask.task, nextTask.encodingOptions)
+    }
   }
 }
 module.exports = AbMergeManager
