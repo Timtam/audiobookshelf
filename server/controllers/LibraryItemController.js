@@ -1247,5 +1247,43 @@ class LibraryItemController {
 
     next()
   }
+
+  /**
+   * Middleware for GET api/items/:id/file/:fileid
+   * Only loads what is needed to serve the file, audio players request this route for every seek
+   *
+   * @param {RequestWithUser} req
+   * @param {Response} res
+   * @param {NextFunction} next
+   */
+  async libraryFileMiddleware(req, res, next) {
+    const libraryItem = await Database.libraryItemModel.findByPk(req.params.id, {
+      attributes: ['id', 'libraryId', 'mediaId', 'mediaType', 'libraryFiles'],
+      include: [
+        {
+          model: Database.bookModel,
+          attributes: ['id', 'tags', 'explicit']
+        },
+        {
+          model: Database.podcastModel,
+          attributes: ['id', 'tags', 'explicit']
+        }
+      ]
+    })
+    if (!libraryItem?.media) return res.sendStatus(404)
+
+    // Check user can access this library item
+    if (!req.user.checkCanAccessLibraryItem(libraryItem)) {
+      return res.sendStatus(403)
+    }
+
+    req.libraryFile = libraryItem.getLibraryFileWithIno(req.params.fileid)
+    if (!req.libraryFile) {
+      Logger.error(`[LibraryItemController] Library file "${req.params.fileid}" does not exist for library item`)
+      return res.sendStatus(404)
+    }
+
+    next()
+  }
 }
 module.exports = new LibraryItemController()

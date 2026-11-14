@@ -299,4 +299,61 @@ describe('LibraryItemController', () => {
       expect(fakeRes.sendStatus.calledWith(403)).to.be.true
     })
   })
+
+  describe('libraryFileMiddleware', () => {
+    let libraryId
+    let libraryItemId
+    let restrictedLibraryItemId
+
+    beforeEach(async () => {
+      const library = await Database.libraryModel.create({ name: 'Lib', mediaType: 'book' })
+      const folder = await Database.libraryFolderModel.create({ path: '/lib', libraryId: library.id })
+      const libraryFiles = [{ ino: '10', metadata: { filename: '01.mp3', ext: '.mp3', path: '/lib/book/01.mp3', relPath: '01.mp3' } }]
+      const book = await Database.bookModel.create({ title: 'Book', audioFiles: [], tags: [], narrators: [], genres: [], chapters: [] })
+      const libraryItem = await Database.libraryItemModel.create({ libraryFiles, mediaId: book.id, mediaType: 'book', libraryId: library.id, libraryFolderId: folder.id })
+      const restrictedBook = await Database.bookModel.create({ title: 'Restricted', audioFiles: [], tags: ['restricted'], narrators: [], genres: [], chapters: [] })
+      const restrictedLibraryItem = await Database.libraryItemModel.create({ libraryFiles, mediaId: restrictedBook.id, mediaType: 'book', libraryId: library.id, libraryFolderId: folder.id })
+      libraryId = library.id
+      libraryItemId = libraryItem.id
+      restrictedLibraryItemId = restrictedLibraryItem.id
+
+      sinon.stub(Logger, 'error')
+    })
+
+    const callMiddleware = async (id, fileid) => {
+      const fakeReq = {
+        params: { id, fileid },
+        user: {
+          checkCanAccessLibraryItem(li) {
+            return li.libraryId === libraryId && !li.media.tags.includes('restricted')
+          }
+        }
+      }
+      const fakeRes = { sendStatus: sinon.spy() }
+      const next = sinon.spy()
+      await LibraryItemController.libraryFileMiddleware.bind(apiRouter)(fakeReq, fakeRes, next)
+      return { fakeReq, fakeRes, next }
+    }
+
+    it('libraryFileMiddleware sets the library file when the user can access the library item', async () => {
+      const { fakeReq, fakeRes, next } = await callMiddleware(libraryItemId, '10')
+      expect(next.calledOnce).to.be.true
+      expect(fakeRes.sendStatus.called).to.be.false
+      expect(fakeReq.libraryFile.metadata.path).to.equal('/lib/book/01.mp3')
+    })
+
+    it('libraryFileMiddleware returns 403 for a library item the user cannot access', async () => {
+      const { fakeRes, next } = await callMiddleware(restrictedLibraryItemId, '10')
+      expect(fakeRes.sendStatus.calledWith(403)).to.be.true
+      expect(next.called).to.be.false
+    })
+
+    it('libraryFileMiddleware returns 404 for an unknown library item or library file', async () => {
+      const unknownItem = await callMiddleware('00000000-0000-4000-8000-000000000000', '10')
+      expect(unknownItem.fakeRes.sendStatus.calledWith(404)).to.be.true
+      const unknownFile = await callMiddleware(libraryItemId, '11')
+      expect(unknownFile.fakeRes.sendStatus.calledWith(404)).to.be.true
+      expect(unknownFile.next.called).to.be.false
+    })
+  })
 })
