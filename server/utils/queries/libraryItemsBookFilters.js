@@ -772,6 +772,7 @@ module.exports = {
     }
 
     const { rows: series, count } = await Database.seriesModel.findAndCountAll({
+      ...Database.readQueryOptions,
       where: [
         {
           id: {
@@ -896,6 +897,7 @@ module.exports = {
 
     // Step 1: Get the first book of every series that hasnt been started yet
     const seriesNotStarted = await Database.seriesModel.findAll({
+      ...Database.readQueryOptions,
       where: [
         {
           libraryId
@@ -972,6 +974,7 @@ module.exports = {
 
     // Step 2a: Count with lightweight includes only
     const count = await Database.bookModel.count({
+      ...Database.readQueryOptions,
       where: discoverWhere,
       replacements: userPermissionBookWhere.replacements,
       include: baseDiscoverInclude,
@@ -982,6 +985,7 @@ module.exports = {
 
     // Step 2b: Select random IDs with lightweight includes only
     const randomSelection = await Database.bookModel.findAll({
+      ...Database.readQueryOptions,
       attributes: ['id'],
       where: discoverWhere,
       replacements: userPermissionBookWhere.replacements,
@@ -1002,6 +1006,7 @@ module.exports = {
 
     // Step 2c: Hydrate selected IDs with full metadata for API response
     const books = await Database.bookModel.findAll({
+      ...Database.readQueryOptions,
       where: {
         id: {
           [Sequelize.Op.in]: selectedIds
@@ -1145,6 +1150,7 @@ module.exports = {
 
     // Search title, subtitle, asin, isbn
     const books = await Database.bookModel.findAll({
+      ...Database.readQueryOptions,
       where: [
         {
           [Sequelize.Op.or]: [
@@ -1221,6 +1227,7 @@ module.exports = {
     // Search narrators
     const narratorMatches = []
     const [narratorResults] = await Database.sequelize.query(`SELECT value, count(*) AS numBooks FROM books b, libraryItems li, json_each(b.narrators) WHERE json_valid(b.narrators) AND ${matchJsonValue} AND b.id = li.mediaId AND li.libraryId = :libraryId GROUP BY value LIMIT :limit OFFSET :offset;`, {
+      ...Database.readQueryOptions,
       replacements: {
         libraryId: library.id,
         limit,
@@ -1238,6 +1245,7 @@ module.exports = {
     // Search tags
     const tagMatches = []
     const [tagResults] = await Database.sequelize.query(`SELECT value, count(*) AS numItems FROM books b, libraryItems li, json_each(b.tags) WHERE json_valid(b.tags) AND ${matchJsonValue} AND b.id = li.mediaId AND li.libraryId = :libraryId GROUP BY value ORDER BY numItems DESC LIMIT :limit OFFSET :offset;`, {
+      ...Database.readQueryOptions,
       replacements: {
         libraryId: library.id,
         limit,
@@ -1255,6 +1263,7 @@ module.exports = {
     // Search genres
     const genreMatches = []
     const [genreResults] = await Database.sequelize.query(`SELECT value, count(*) AS numItems FROM books b, libraryItems li, json_each(b.genres) WHERE json_valid(b.genres) AND ${matchJsonValue} AND b.id = li.mediaId AND li.libraryId = :libraryId GROUP BY value ORDER BY numItems DESC LIMIT :limit OFFSET :offset;`, {
+      ...Database.readQueryOptions,
       replacements: {
         libraryId: library.id,
         limit,
@@ -1272,6 +1281,7 @@ module.exports = {
     // Search series
     const matchName = textSearchQuery.matchExpression('name')
     const allSeries = await Database.seriesModel.findAll({
+      ...Database.readQueryOptions,
       where: {
         [Sequelize.Op.and]: [
           Sequelize.literal(matchName),
@@ -1335,6 +1345,7 @@ module.exports = {
   async getGenresWithCount(libraryId) {
     const genres = []
     const [genreResults] = await Database.sequelize.query(`SELECT value, count(*) AS numItems FROM books b, libraryItems li, json_each(b.genres) WHERE json_valid(b.genres) AND b.id = li.mediaId AND li.libraryId = :libraryId GROUP BY value ORDER BY numItems DESC;`, {
+      ...Database.readQueryOptions,
       replacements: {
         libraryId
       },
@@ -1356,6 +1367,7 @@ module.exports = {
    */
   async getBookLibraryStats(libraryId) {
     const [statResults] = await Database.sequelize.query(`SELECT SUM(li.size) AS totalSize, SUM(b.duration) AS totalDuration, SUM(json_array_length(b.audioFiles)) AS numAudioFiles, COUNT(*) AS totalItems FROM libraryItems li, books b WHERE b.id = li.mediaId AND li.libraryId = :libraryId;`, {
+      ...Database.readQueryOptions,
       replacements: {
         libraryId
       }
@@ -1376,6 +1388,7 @@ module.exports = {
    */
   async getLongestBooks(libraryId, limit) {
     const books = await Database.bookModel.findAll({
+      ...Database.readQueryOptions,
       attributes: ['id', 'title', 'duration'],
       include: {
         model: Database.libraryItemModel,

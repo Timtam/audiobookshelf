@@ -29,9 +29,10 @@ class Collection extends Model {
    * @param {import('./User')} user
    * @param {string} [libraryId]
    * @param {string[]} [include]
+   * @param {import('sequelize').FindOptions} [queryOptions]
    * @async
    */
-  static async getOldCollectionsJsonExpanded(user, libraryId, include) {
+  static async getOldCollectionsJsonExpanded(user, libraryId, include, queryOptions = {}) {
     let collectionWhere = null
     if (libraryId) {
       collectionWhere = {
@@ -48,6 +49,7 @@ class Collection extends Model {
     }
 
     const collections = await this.findAll({
+      ...queryOptions,
       where: collectionWhere,
       include: [
         {

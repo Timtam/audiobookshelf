@@ -309,6 +309,7 @@ module.exports = {
     const userPermissionPodcastWhere = this.getUserPermissionPodcastWhereQuery(user)
 
     const findOptions = {
+      ...Database.readQueryOptions,
       where: podcastEpisodeWhere,
       replacements: userPermissionPodcastWhere.replacements,
       include: [

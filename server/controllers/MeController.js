@@ -488,7 +488,7 @@ class MeController {
     const mediaProgressesInProgress = req.user.mediaProgresses.filter((mp) => !mp.isFinished && (mp.currentTime > 0 || mp.ebookProgress > 0))
 
     const libraryItemsIds = [...new Set(mediaProgressesInProgress.map((mp) => mp.extraData?.libraryItemId).filter((id) => id))]
-    const libraryItems = await Database.libraryItemModel.findAllExpandedWhere({ id: libraryItemsIds })
+    const libraryItems = await Database.libraryItemModel.findAllExpandedWhere({ id: libraryItemsIds }, Database.readQueryOptions)
 
     let itemsInProgress = []
 

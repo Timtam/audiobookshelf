@@ -34,6 +34,7 @@ describe('Database', () => {
     global.ConfigPath = originalConfigPath
     delete process.env.SQLITE_JOURNAL_MODE
     delete process.env.SQLITE_CACHE_SIZE
+    delete process.env.NUSQLITE3_PATH
 
     await Database.sequelize.close()
     Database.readQueryOptions = {}
@@ -81,6 +82,19 @@ describe('Database', () => {
       expect(Database.readQueryOptions).to.deep.equal({ uuid: 'read' })
       expect(Object.keys(Database.sequelize.connectionManager.connections)).to.have.members(['default', 'read'])
       expect(await getPragma('cache_size', Database.readQueryOptions)).to.equal(-4000)
+    })
+
+    it('should load the extension for the second connection', async () => {
+      process.env.NUSQLITE3_PATH = '/path/to/libnusqlite3'
+      const loadExtensionStub = sinon.stub(sqlite3.Database.prototype, 'loadExtension').callsArg(1)
+
+      await Database.connect()
+      await Database.openReadConnection()
+
+      const connections = Database.sequelize.connectionManager.connections
+      expect(loadExtensionStub.calledTwice).to.be.true
+      expect(loadExtensionStub.alwaysCalledWith('/path/to/libnusqlite3')).to.be.true
+      expect(loadExtensionStub.thisValues).to.deep.equal([connections.default, connections.read])
     })
   })
 

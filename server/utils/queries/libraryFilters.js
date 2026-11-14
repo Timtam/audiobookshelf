@@ -257,6 +257,7 @@ module.exports = {
     }
 
     const { rows: series, count } = await Database.seriesModel.findAndCountAll({
+      ...Database.readQueryOptions,
       where: seriesWhere,
       limit,
       offset: 0,
@@ -337,6 +338,7 @@ module.exports = {
     const { bookWhere, replacements } = libraryItemsBookFilters.getUserPermissionBookWhereQuery(user)
 
     const { rows: authors, count } = await Database.authorModel.findAndCountAll({
+      ...Database.readQueryOptions,
       where: {
         libraryId: library.id,
         createdAt: {
@@ -582,6 +584,7 @@ module.exports = {
       // of actually loading the data twice
 
       const changedBooks = await Database.bookModel.count({
+        ...Database.readQueryOptions,
         include: {
           model: Database.libraryItemModel,
           attributes: [],
@@ -637,6 +640,7 @@ module.exports = {
 
       // Something has changed in one of the tables, so reload all of the filter data for library
       const books = await Database.bookModel.findAll({
+        ...Database.readQueryOptions,
         include: {
           model: Database.libraryItemModel,
           attributes: ['isMissing', 'isInvalid'],

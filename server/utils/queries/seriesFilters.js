@@ -151,6 +151,7 @@ module.exports = {
     }
 
     const { rows: series, count } = await Database.seriesModel.findAndCountAll({
+      ...Database.readQueryOptions,
       where: seriesWhere,
       limit,
       offset,

@@ -147,10 +147,12 @@ class LibraryItem extends Model {
   /**
    *
    * @param {import('sequelize').WhereOptions} where
+   * @param {import('sequelize').FindOptions} [queryOptions]
    * @returns {Promise<LibraryItemExpanded[]>}
    */
-  static async findAllExpandedWhere(where = null) {
+  static async findAllExpandedWhere(where = null, queryOptions = {}) {
     return this.findAll({
+      ...queryOptions,
       where,
       include: [
         {
