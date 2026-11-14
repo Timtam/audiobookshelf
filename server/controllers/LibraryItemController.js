@@ -1258,6 +1258,8 @@ class LibraryItemController {
    */
   async libraryFileMiddleware(req, res, next) {
     const libraryItem = await Database.libraryItemModel.findByPk(req.params.id, {
+      // Sequelize uses a separate sqlite connection for this uuid, so that the lookup does not have to wait for slow queries on the main connection
+      uuid: 'libraryFile',
       attributes: ['id', 'libraryId', 'mediaId', 'mediaType', 'libraryFiles'],
       include: [
         {
