@@ -4,7 +4,7 @@ const fileUtils = require('../../../server/utils/fileUtils')
 const fs = require('../../../server/libs/fsExtra')
 const EventEmitter = require('events')
 
-const { generateFFMetadata, addCoverAndMetadataToFile, mergeAudioFiles } = require('../../../server/utils/ffmpegHelpers')
+const { generateFFMetadata, addCoverAndMetadataToFile } = require('../../../server/utils/ffmpegHelpers')
 
 global.isWin = process.platform === 'win32'
 
@@ -245,75 +245,5 @@ describe('addCoverAndMetadataToFile', () => {
 
     // Restore the stub
     sinon.restore()
-  })
-})
-
-describe('mergeAudioFiles', () => {
-  const audioTracks = [{ index: 1, duration: 60, metadata: { path: '/path/to/audio/file.mp3', ext: '.mp3' } }]
-  const outputFilePath = '/path/to/cache/file.m4b'
-  const metadataFilePath = '/path/to/metadata/file.txt'
-
-  let ffmpegStub = null
-  beforeEach(() => {
-    ffmpegStub = new EventEmitter()
-    ffmpegStub.input = sinon.stub().returnsThis()
-    ffmpegStub.inputOptions = sinon.stub().returnsThis()
-    ffmpegStub.outputOptions = sinon.stub().returnsThis()
-    ffmpegStub.output = sinon.stub().returnsThis()
-    ffmpegStub.run = sinon.stub().callsFake(() => {
-      ffmpegStub.emit('end')
-    })
-  })
-
-  it('should merge audio files without metadata', async () => {
-    // Act
-    await mergeAudioFiles(audioTracks, 60, '/path/to/cache', outputFilePath, {}, null, ffmpegStub)
-
-    // Assert
-    expect(ffmpegStub.input.calledOnce).to.be.true
-    expect(ffmpegStub.input.firstCall.args[0]).to.equal('/path/to/audio/file.mp3')
-
-    expect(ffmpegStub.outputOptions.callCount).to.equal(2)
-    expect(ffmpegStub.outputOptions.getCall(0).args[0]).to.deep.equal(['-f mp4'])
-    expect(ffmpegStub.outputOptions.getCall(1).args[0]).to.deep.equal(['-map 0:a', '-acodec aac', '-ac 2', '-b:a 128k'])
-
-    expect(ffmpegStub.output.calledOnce).to.be.true
-    expect(ffmpegStub.output.firstCall.args[0]).to.equal(outputFilePath)
-
-    expect(ffmpegStub.run.calledOnce).to.be.true
-  })
-
-  it('should embed metadata and cover image in the same run', async () => {
-    // Act
-    await mergeAudioFiles(audioTracks, 60, '/path/to/cache', outputFilePath, {}, null, ffmpegStub, metadataFilePath, '/path/to/cover/image.jpg')
-
-    // Assert
-    expect(ffmpegStub.input.calledThrice).to.be.true
-    expect(ffmpegStub.input.getCall(1).args[0]).to.equal(metadataFilePath)
-    expect(ffmpegStub.input.getCall(2).args[0]).to.equal('/path/to/cover/image.jpg')
-
-    expect(ffmpegStub.outputOptions.callCount).to.equal(5)
-    expect(ffmpegStub.outputOptions.getCall(2).args[0]).to.deep.equal(['-map_metadata 1', '-map_metadata 0', '-map_chapters 1', '-metadata track=1'])
-    expect(ffmpegStub.outputOptions.getCall(3).args[0]).to.deep.equal(['-metadata', 'creation_time=', '-metadata', 'company_name=', '-metadata', 'product_name=', '-metadata', 'product_version='])
-    expect(ffmpegStub.outputOptions.getCall(4).args[0]).to.deep.equal(['-map 2:v', '-c:v copy', '-disposition:v:0 attached_pic', '-metadata:s:v', 'title=Cover', '-metadata:s:v', 'comment=Cover'])
-
-    expect(ffmpegStub.run.calledOnce).to.be.true
-  })
-
-  it('should convert a webp cover image to jpeg and handle missing cover image', async () => {
-    // Act
-    await mergeAudioFiles(audioTracks, 60, '/path/to/cache', outputFilePath, {}, null, ffmpegStub, metadataFilePath, '/path/to/cover/image.webp')
-
-    // Assert
-    expect(ffmpegStub.outputOptions.getCall(4).args[0][1]).to.equal('-c:v mjpeg')
-
-    // Act
-    ffmpegStub.input.resetHistory()
-    ffmpegStub.outputOptions.resetHistory()
-    await mergeAudioFiles(audioTracks, 60, '/path/to/cache', outputFilePath, {}, null, ffmpegStub, metadataFilePath, null)
-
-    // Assert
-    expect(ffmpegStub.input.calledTwice).to.be.true
-    expect(ffmpegStub.outputOptions.callCount).to.equal(4)
   })
 })

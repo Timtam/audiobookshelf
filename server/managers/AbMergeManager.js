@@ -137,19 +137,20 @@ class AbMergeManager {
       task
     })
 
+    const encodeFraction = 0.95
+    const embedFraction = 1 - encodeFraction
     try {
       const trackProgressMonitor = new TrackProgressMonitor(
         libraryItem.media.includedAudioFiles.map((t) => t.duration),
         (trackIndex) => SocketAuthority.adminEmitter('track_started', { libraryItemId: libraryItem.id, ino: task.data.inos[trackIndex] }),
         (trackIndex, progressInTrack, taskProgress) => {
           SocketAuthority.adminEmitter('track_progress', { libraryItemId: libraryItem.id, ino: task.data.inos[trackIndex], progress: progressInTrack })
-          SocketAuthority.adminEmitter('task_progress', { libraryItemId: libraryItem.id, progress: taskProgress })
+          SocketAuthority.adminEmitter('task_progress', { libraryItemId: libraryItem.id, progress: taskProgress * encodeFraction })
         },
         (trackIndex) => SocketAuthority.adminEmitter('track_finished', { libraryItemId: libraryItem.id, ino: task.data.inos[trackIndex] })
       )
-      // Low priority so that the server stays responsive. Metadata and cover are embedded in the same ffmpeg run
-      task.data.ffmpeg = new Ffmpeg({ niceness: 10 })
-      await ffmpegHelpers.mergeAudioFiles(libraryItem.media.includedAudioFiles, task.data.duration, task.data.itemCachePath, task.data.tempFilepath, encodingOptions, (progress) => trackProgressMonitor.update(progress), task.data.ffmpeg, task.data.ffmetadataPath, task.data.coverPath)
+      task.data.ffmpeg = new Ffmpeg()
+      await ffmpegHelpers.mergeAudioFiles(libraryItem.media.includedAudioFiles, task.data.duration, task.data.itemCachePath, task.data.tempFilepath, encodingOptions, (progress) => trackProgressMonitor.update(progress), task.data.ffmpeg)
       delete task.data.ffmpeg
       trackProgressMonitor.finish()
     } catch (error) {
@@ -160,6 +161,38 @@ class AbMergeManager {
         const taskFailedString = {
           text: 'Failed to merge audio files',
           key: 'MessageTaskFailedToMergeAudioFiles'
+        }
+        task.setFailed(taskFailedString)
+        this.removeTask(task, true)
+      }
+      return
+    }
+
+    // Write metadata to merged file
+    try {
+      task.data.ffmpeg = new Ffmpeg()
+      await ffmpegHelpers.addCoverAndMetadataToFile(
+        task.data.tempFilepath,
+        task.data.coverPath,
+        task.data.ffmetadataPath,
+        1,
+        'audio/mp4',
+        (progress) => {
+          Logger.debug(`[AbMergeManager] Embedding metadata progress: ${100 * encodeFraction + progress * embedFraction}`)
+          SocketAuthority.adminEmitter('task_progress', { libraryItemId: libraryItem.id, progress: 100 * encodeFraction + progress * embedFraction })
+        },
+        task.data.ffmpeg
+      )
+      delete task.data.ffmpeg
+    } catch (error) {
+      if (error.message === 'FFMPEG_CANCELED') {
+        Logger.info(`[AbMergeManager] Task cancelled ${task.id}`)
+      } else {
+        Logger.error(`[AbMergeManager] Failed to embed metadata in file "${task.data.tempFilepath}"`)
+        const taskFailedString = {
+          text: `Failed to embed metadata in file ${Path.basename(task.data.tempFilepath)}`,
+          key: 'MessageTaskFailedToEmbedMetadataInFile',
+          subs: [Path.basename(task.data.tempFilepath)]
         }
         task.setFailed(taskFailedString)
         this.removeTask(task, true)

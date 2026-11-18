@@ -442,11 +442,9 @@ module.exports.getFFMetadataObject = getFFMetadataObject
  * @param {import('../managers/AbMergeManager').AbMergeEncodeOptions} encodingOptions - The options for encoding the audio.
  * @param {Function} [progressCB=null] - The callback function to track the progress of the merge.
  * @param {import('../libs/fluentFfmpeg/index').FfmpegCommand} [ffmpeg=Ffmpeg()] - The FFmpeg instance to use for merging.
- * @param {string} [metadataFilePath=null] - Path to the ffmetadata file. Embeds metadata tags, chapters and the cover image in the same run, like addCoverAndMetadataToFile.
- * @param {string} [coverFilePath=null] - Path to the cover image file to embed.
  * @returns {Promise<void>} A promise that resolves when the audio files are merged successfully.
  */
-async function mergeAudioFiles(audioTracks, duration, itemCachePath, outputFilePath, encodingOptions, progressCB = null, ffmpeg = Ffmpeg(), metadataFilePath = null, coverFilePath = null) {
+async function mergeAudioFiles(audioTracks, duration, itemCachePath, outputFilePath, encodingOptions, progressCB = null, ffmpeg = Ffmpeg()) {
   const audioBitrate = encodingOptions.bitrate || '128k'
   const audioCodec = encodingOptions.codec || 'aac'
   const audioChannels = encodingOptions.channels || 2
@@ -481,29 +479,6 @@ async function mergeAudioFiles(audioTracks, duration, itemCachePath, outputFileP
       ffmpeg.outputOptions(['-c copy'])
     } else {
       ffmpeg.outputOptions(['-c:a copy'])
-    }
-  }
-
-  if (metadataFilePath) {
-    ffmpeg.input(metadataFilePath).outputOptions([
-      '-map_metadata 1', // map metadata tags from metadata file first
-      '-map_metadata 0', // add additional metadata tags from input file
-      '-map_chapters 1', // map chapters from metadata file
-      '-metadata track=1'
-    ])
-    // Remove the tags ffmpeg only copies from the input file when it is mapped, so that the tags are the same as with addCoverAndMetadataToFile
-    ffmpeg.outputOptions(['-metadata', 'creation_time=', '-metadata', 'company_name=', '-metadata', 'product_name=', '-metadata', 'product_version='])
-
-    if (coverFilePath) {
-      ffmpeg.input(coverFilePath).outputOptions([
-        '-map 2:v', // map video stream from cover image file
-        `-c:v ${Path.extname(coverFilePath).toLowerCase() === '.webp' ? 'mjpeg' : 'copy'}`, // convert webp images to jpeg
-        '-disposition:v:0 attached_pic', // set cover image as attached picture
-        '-metadata:s:v',
-        'title=Cover', // add title metadata to cover image stream
-        '-metadata:s:v',
-        'comment=Cover' // add comment metadata to cover image stream
-      ])
     }
   }
 
