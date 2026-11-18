@@ -81,6 +81,8 @@ class LibraryItem extends Model {
     this.authorNamesFirstLast // Only used for sorting
     /** @type {string} */
     this.authorNamesLastFirst // Only used for sorting
+    /** @type {number} - set when loaded without libraryFiles */
+    this.numFiles
   }
 
   /**
@@ -145,10 +147,12 @@ class LibraryItem extends Model {
   /**
    *
    * @param {import('sequelize').WhereOptions} where
+   * @param {import('sequelize').FindOptions} [queryOptions]
    * @returns {Promise<LibraryItemExpanded[]>}
    */
-  static async findAllExpandedWhere(where = null) {
+  static async findAllExpandedWhere(where = null, queryOptions = {}) {
     return this.findAll({
+      ...queryOptions,
       where,
       include: [
         {
@@ -197,36 +201,7 @@ class LibraryItem extends Model {
       return null
     }
 
-    if (libraryItem.mediaType === 'podcast') {
-      libraryItem.media = await libraryItem.getMedia({
-        include: [
-          {
-            model: this.sequelize.models.podcastEpisode
-          }
-        ]
-      })
-    } else {
-      libraryItem.media = await libraryItem.getMedia({
-        include: [
-          {
-            model: this.sequelize.models.author,
-            through: {
-              attributes: []
-            }
-          },
-          {
-            model: this.sequelize.models.series,
-            through: {
-              attributes: ['id', 'sequence']
-            }
-          }
-        ],
-        order: [
-          [this.sequelize.models.author, this.sequelize.models.bookAuthor, 'createdAt', 'ASC'],
-          [this.sequelize.models.series, 'bookSeries', 'createdAt', 'ASC']
-        ]
-      })
-    }
+    libraryItem.media = await libraryItem.getMediaExpanded()
 
     if (!libraryItem.media) return null
     return libraryItem
@@ -249,36 +224,7 @@ class LibraryItem extends Model {
       return null
     }
 
-    if (libraryItem.mediaType === 'podcast') {
-      libraryItem.media = await libraryItem.getMedia({
-        include: [
-          {
-            model: this.sequelize.models.podcastEpisode
-          }
-        ]
-      })
-    } else {
-      libraryItem.media = await libraryItem.getMedia({
-        include: [
-          {
-            model: this.sequelize.models.author,
-            through: {
-              attributes: []
-            }
-          },
-          {
-            model: this.sequelize.models.series,
-            through: {
-              attributes: ['id', 'sequence']
-            }
-          }
-        ],
-        order: [
-          [this.sequelize.models.author, this.sequelize.models.bookAuthor, 'createdAt', 'ASC'],
-          [this.sequelize.models.series, 'bookSeries', 'createdAt', 'ASC']
-        ]
-      })
-    }
+    libraryItem.media = await libraryItem.getMediaExpanded()
 
     if (!libraryItem.media) return null
     return libraryItem
@@ -874,10 +820,12 @@ class LibraryItem extends Model {
   }
 
   /**
+   * Authors and series of a book are loaded with separate queries. When both are included in the book query,
+   * sqlite joins all authors and all series before it looks at the book, which is slow in a large database.
    *
    * @returns {Promise<Book|Podcast>}
    */
-  getMediaExpanded() {
+  async getMediaExpanded() {
     if (this.mediaType === 'podcast') {
       return this.getMedia({
         include: [
@@ -886,28 +834,21 @@ class LibraryItem extends Model {
           }
         ]
       })
-    } else {
-      return this.getMedia({
-        include: [
-          {
-            model: this.sequelize.models.author,
-            through: {
-              attributes: []
-            }
-          },
-          {
-            model: this.sequelize.models.series,
-            through: {
-              attributes: ['sequence']
-            }
-          }
-        ],
-        order: [
-          [this.sequelize.models.author, this.sequelize.models.bookAuthor, 'createdAt', 'ASC'],
-          [this.sequelize.models.series, 'bookSeries', 'createdAt', 'ASC']
-        ]
-      })
     }
+
+    const book = await this.getMedia()
+    if (!book) return null
+
+    // The second sort key keeps authors and series that were added at the same time in the order the single query returned them
+    book.authors = book.dataValues.authors = await book.getAuthors({
+      joinTableAttributes: [],
+      order: [this.sequelize.literal('bookAuthor.createdAt ASC, author.rowid ASC')]
+    })
+    book.series = book.dataValues.series = await book.getSeries({
+      joinTableAttributes: ['id', 'sequence'],
+      order: [this.sequelize.literal('bookSeries.createdAt ASC, bookSeries.id ASC')]
+    })
+    return book
   }
 
   /**
@@ -1020,7 +961,7 @@ class LibraryItem extends Model {
       isInvalid: !!this.isInvalid,
       mediaType: this.mediaType,
       media: this.media.toOldJSONMinified(),
-      numFiles: this.libraryFiles.length,
+      numFiles: this.numFiles ?? this.libraryFiles.length,
       size: this.size
     }
   }

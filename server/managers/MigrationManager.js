@@ -100,6 +100,8 @@ class MigrationManager {
         Logger.info(`[MigrationManager] Migrating database ${migrationDirection} to version ${this.serverVersion}`)
         Logger.info(`[MigrationManager] Migrations to run: ${migrationsToRun.join(', ')}`)
         // Create a backup copy of the SQLite database before starting migrations
+        // In WAL mode the latest changes are only in the database file after a checkpoint
+        await this.sequelize.query('PRAGMA wal_checkpoint(TRUNCATE)')
         await fs.copy(originalDbPath, backupDbPath)
         Logger.info('Created a backup of the original database.')
 

@@ -196,6 +196,7 @@ module.exports = {
    */
   async getLargestItems(libraryId, limit) {
     const libraryItems = await Database.libraryItemModel.findAll({
+      ...Database.readQueryOptions,
       attributes: ['id', 'mediaId', 'mediaType', 'size'],
       where: {
         libraryId

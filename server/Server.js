@@ -230,10 +230,18 @@ class Server {
         sigintAlreadyReceived = true
         Logger.info('SIGINT (Ctrl+C) received. Shutting down...')
         await this.stop()
+        await Database.disconnect()
         Logger.info('Server stopped. Exiting.')
       } else {
         Logger.info('SIGINT (Ctrl+C) received again. Exiting immediately.')
       }
+      process.exit(0)
+    })
+
+    // Sent by docker stop. Disconnecting writes the write-ahead log into the database file
+    process.on('SIGTERM', async () => {
+      Logger.info('SIGTERM received. Exiting.')
+      await Database.disconnect()
       process.exit(0)
     })
 

@@ -11,6 +11,7 @@ module.exports = {
    */
   async getListeningSessionsForYear(year) {
     const sessions = await Database.playbackSessionModel.findAll({
+      ...Database.readQueryOptions,
       where: {
         createdAt: {
           [Sequelize.Op.gte]: `${year}-01-01`,
@@ -45,6 +46,7 @@ module.exports = {
    */
   async getBooksAddedForYear(year) {
     const books = await Database.bookModel.findAll({
+      ...Database.readQueryOptions,
       attributes: ['id', 'title', 'coverPath', 'duration', 'createdAt'],
       where: {
         createdAt: {
@@ -146,6 +148,7 @@ module.exports = {
 
     // Stats for total books, size and duration for everything added this year or earlier
     const [totalStatResultsRow] = await Database.sequelize.query(`SELECT SUM(li.size) AS totalSize, SUM(b.duration) AS totalDuration, COUNT(*) AS totalItems FROM libraryItems li, books b WHERE b.id = li.mediaId AND li.mediaType = 'book' AND li.createdAt < ":nextYear-01-01";`, {
+      ...Database.readQueryOptions,
       replacements: {
         nextYear: year + 1
       }

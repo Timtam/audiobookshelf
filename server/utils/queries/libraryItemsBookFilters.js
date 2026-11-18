@@ -7,6 +7,7 @@ const ShareManager = require('../../managers/ShareManager')
 const { profile } = require('../profiler')
 const stringifySequelizeQuery = require('../stringifySequelizeQuery')
 const countCache = new Map()
+const minifiedStatsCache = new Map()
 
 module.exports = {
   /**
@@ -314,6 +315,7 @@ module.exports = {
    */
   async getCollapseSeriesBooksToExclude(bookFindOptions, seriesWhere, replacements = {}) {
     const allSeries = await Database.seriesModel.findAll({
+      ...Database.readQueryOptions,
       attributes: ['id', 'name', [Sequelize.literal('(SELECT count(*) FROM bookSeries bs WHERE bs.seriesId = series.id)'), 'numBooks']],
       distinct: true,
       subQuery: false,
@@ -333,26 +335,27 @@ module.exports = {
       order: [Sequelize.literal('CAST(`books.bookSeries.sequence` AS FLOAT) ASC NULLS LAST')]
     })
     const bookSeriesToInclude = []
-    const booksToInclude = []
-    let booksToExclude = []
+    // Sets because array lookups get slow with thousands of books in series
+    const booksToInclude = new Set()
+    const booksToExclude = new Set()
     allSeries.forEach((s) => {
       let found = false
       for (let book of s.books) {
-        if (!found && !booksToInclude.includes(book.id)) {
-          booksToInclude.push(book.id)
+        if (!found && !booksToInclude.has(book.id)) {
+          booksToInclude.add(book.id)
           bookSeriesToInclude.push({
             id: book.bookSeries.id,
             numBooks: s.dataValues.numBooks,
             libraryItemIds: s.books?.map((b) => b.libraryItem.id) || []
           })
-          booksToExclude = booksToExclude.filter((bid) => bid !== book.id)
+          booksToExclude.delete(book.id)
           found = true
-        } else if (!booksToExclude.includes(book.id) && !booksToInclude.includes(book.id)) {
-          booksToExclude.push(book.id)
+        } else if (!booksToExclude.has(book.id) && !booksToInclude.has(book.id)) {
+          booksToExclude.add(book.id)
         }
       }
     })
-    return { booksToExclude, bookSeriesToInclude }
+    return { booksToExclude: [...booksToExclude], bookSeriesToInclude }
   },
 
   clearCountCache(hook) {
@@ -385,6 +388,41 @@ module.exports = {
   },
 
   /**
+   * Set minifiedStats on books and numFiles on their library items for books that were loaded without audioFiles, chapters and libraryFiles.
+   * These columns hold large JSON. Loading them for every book of a library is slow and blocks the server while the JSON is parsed,
+   * so what the minified JSON needs from them is kept in memory until the book or library item is updated.
+   *
+   * @param {import('../../models/Book')[]} books
+   */
+  async loadMinifiedStats(books) {
+    const getVersion = (book) => `${book.updatedAt.valueOf()}:${book.libraryItem.updatedAt.valueOf()}`
+    const booksToLoad = books.filter((book) => minifiedStatsCache.get(book.id)?.version !== getVersion(book))
+    // A few books at a time so that parsing the JSON does not block other requests for long
+    for (let i = 0; i < booksToLoad.length; i += 20) {
+      const loadedBooks = await Database.bookModel.findAll({
+        ...Database.readQueryOptions,
+        attributes: ['id', 'audioFiles', 'chapters', 'ebookFile', 'updatedAt'],
+        include: {
+          model: Database.libraryItemModel,
+          attributes: ['id', 'updatedAt', [Sequelize.literal('json_array_length(`libraryItem`.`libraryFiles`)'), 'numFiles']],
+          required: true
+        },
+        where: {
+          id: booksToLoad.slice(i, i + 20).map((book) => book.id)
+        }
+      })
+      for (const book of loadedBooks) {
+        minifiedStatsCache.set(book.id, { version: getVersion(book), stats: book.getMinifiedStats(), numFiles: book.libraryItem.dataValues.numFiles })
+      }
+    }
+    for (const book of books) {
+      const cached = minifiedStatsCache.get(book.id)
+      book.minifiedStats = cached?.stats
+      book.libraryItem.numFiles = cached?.numFiles
+    }
+  },
+
+  /**
    * Get library items for book media type using filter and sort
    * @param {string} libraryId
    * @param {import('../../models/User')} user
@@ -410,7 +448,8 @@ module.exports = {
     const includeRSSFeed = include.includes('rssfeed')
     const includeMediaItemShare = !!user?.isAdminOrUp && include.includes('share')
 
-    let bookAttributes = null
+    // The large JSON columns are not loaded, see loadMinifiedStats
+    const bookAttributes = { exclude: ['audioFiles', 'chapters'], include: [] }
 
     const libraryItemWhere = {
       libraryId
@@ -577,6 +616,7 @@ module.exports = {
         include: [
           {
             model: Database.libraryItemModel,
+            attributes: ['id'],
             required: true,
             where: libraryItemWhere,
             include: libraryItemIncludes
@@ -594,7 +634,6 @@ module.exports = {
         })
       }
       collapseSeriesBookSeries = bookSeriesToInclude
-      if (!bookAttributes?.include) bookAttributes = { include: [] }
 
       // When collapsing series and sorting by title then use the series name instead of the book title
       //  for this set an attribute "display_title" to use in sorting
@@ -606,6 +645,7 @@ module.exports = {
     }
 
     const findOptions = {
+      ...Database.readQueryOptions,
       where: bookWhere,
       distinct: true,
       attributes: bookAttributes,
@@ -613,6 +653,7 @@ module.exports = {
       include: [
         {
           model: Database.libraryItemModel,
+          attributes: { exclude: ['libraryFiles'] },
           required: true,
           where: libraryItemWhere,
           include: libraryItemIncludes
@@ -626,7 +667,11 @@ module.exports = {
     }
 
     const findAndCountAll = process.env.QUERY_PROFILING ? profile(this.findAndCountAll) : this.findAndCountAll
-    const { rows: books, count } = await findAndCountAll(findOptions, limit, offset, !filterGroup && !userPermissionBookWhere.bookWhere.length)
+    const { rows, count } = await findAndCountAll(findOptions, limit, offset, !filterGroup && !userPermissionBookWhere.bookWhere.length)
+
+    await this.loadMinifiedStats(rows)
+    // A book that was removed in the meantime has no stats
+    const books = rows.filter((book) => book.minifiedStats)
 
     const libraryItems = books.map((bookExpanded) => {
       const libraryItem = bookExpanded.libraryItem
@@ -730,6 +775,7 @@ module.exports = {
     }
 
     const { rows: series, count } = await Database.seriesModel.findAndCountAll({
+      ...Database.readQueryOptions,
       where: [
         {
           id: {
@@ -854,6 +900,7 @@ module.exports = {
 
     // Step 1: Get the first book of every series that hasnt been started yet
     const seriesNotStarted = await Database.seriesModel.findAll({
+      ...Database.readQueryOptions,
       where: [
         {
           libraryId
@@ -930,6 +977,7 @@ module.exports = {
 
     // Step 2a: Count with lightweight includes only
     const count = await Database.bookModel.count({
+      ...Database.readQueryOptions,
       where: discoverWhere,
       replacements: userPermissionBookWhere.replacements,
       include: baseDiscoverInclude,
@@ -940,6 +988,7 @@ module.exports = {
 
     // Step 2b: Select random IDs with lightweight includes only
     const randomSelection = await Database.bookModel.findAll({
+      ...Database.readQueryOptions,
       attributes: ['id'],
       where: discoverWhere,
       replacements: userPermissionBookWhere.replacements,
@@ -960,6 +1009,7 @@ module.exports = {
 
     // Step 2c: Hydrate selected IDs with full metadata for API response
     const books = await Database.bookModel.findAll({
+      ...Database.readQueryOptions,
       where: {
         id: {
           [Sequelize.Op.in]: selectedIds
@@ -1103,6 +1153,7 @@ module.exports = {
 
     // Search title, subtitle, asin, isbn
     const books = await Database.bookModel.findAll({
+      ...Database.readQueryOptions,
       where: [
         {
           [Sequelize.Op.or]: [
@@ -1179,6 +1230,7 @@ module.exports = {
     // Search narrators
     const narratorMatches = []
     const [narratorResults] = await Database.sequelize.query(`SELECT value, count(*) AS numBooks FROM books b, libraryItems li, json_each(b.narrators) WHERE json_valid(b.narrators) AND ${matchJsonValue} AND b.id = li.mediaId AND li.libraryId = :libraryId GROUP BY value LIMIT :limit OFFSET :offset;`, {
+      ...Database.readQueryOptions,
       replacements: {
         libraryId: library.id,
         limit,
@@ -1196,6 +1248,7 @@ module.exports = {
     // Search tags
     const tagMatches = []
     const [tagResults] = await Database.sequelize.query(`SELECT value, count(*) AS numItems FROM books b, libraryItems li, json_each(b.tags) WHERE json_valid(b.tags) AND ${matchJsonValue} AND b.id = li.mediaId AND li.libraryId = :libraryId GROUP BY value ORDER BY numItems DESC LIMIT :limit OFFSET :offset;`, {
+      ...Database.readQueryOptions,
       replacements: {
         libraryId: library.id,
         limit,
@@ -1213,6 +1266,7 @@ module.exports = {
     // Search genres
     const genreMatches = []
     const [genreResults] = await Database.sequelize.query(`SELECT value, count(*) AS numItems FROM books b, libraryItems li, json_each(b.genres) WHERE json_valid(b.genres) AND ${matchJsonValue} AND b.id = li.mediaId AND li.libraryId = :libraryId GROUP BY value ORDER BY numItems DESC LIMIT :limit OFFSET :offset;`, {
+      ...Database.readQueryOptions,
       replacements: {
         libraryId: library.id,
         limit,
@@ -1230,6 +1284,7 @@ module.exports = {
     // Search series
     const matchName = textSearchQuery.matchExpression('name')
     const allSeries = await Database.seriesModel.findAll({
+      ...Database.readQueryOptions,
       where: {
         [Sequelize.Op.and]: [
           Sequelize.literal(matchName),
@@ -1293,6 +1348,7 @@ module.exports = {
   async getGenresWithCount(libraryId) {
     const genres = []
     const [genreResults] = await Database.sequelize.query(`SELECT value, count(*) AS numItems FROM books b, libraryItems li, json_each(b.genres) WHERE json_valid(b.genres) AND b.id = li.mediaId AND li.libraryId = :libraryId GROUP BY value ORDER BY numItems DESC;`, {
+      ...Database.readQueryOptions,
       replacements: {
         libraryId
       },
@@ -1314,6 +1370,7 @@ module.exports = {
    */
   async getBookLibraryStats(libraryId) {
     const [statResults] = await Database.sequelize.query(`SELECT SUM(li.size) AS totalSize, SUM(b.duration) AS totalDuration, SUM(json_array_length(b.audioFiles)) AS numAudioFiles, COUNT(*) AS totalItems FROM libraryItems li, books b WHERE b.id = li.mediaId AND li.libraryId = :libraryId;`, {
+      ...Database.readQueryOptions,
       replacements: {
         libraryId
       }
@@ -1334,6 +1391,7 @@ module.exports = {
    */
   async getLongestBooks(libraryId, limit) {
     const books = await Database.bookModel.findAll({
+      ...Database.readQueryOptions,
       attributes: ['id', 'title', 'duration'],
       include: {
         model: Database.libraryItemModel,

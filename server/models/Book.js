@@ -131,6 +131,8 @@ class Book extends Model {
     this.authors
     /** @type {import('./Series')[]} - optional if expanded */
     this.series
+    /** @type {{numTracks: number, numAudioFiles: number, numChapters: number, size: number}} - set when loaded without audioFiles and chapters */
+    this.minifiedStats
   }
 
   /**
@@ -334,6 +336,20 @@ class Book extends Model {
       total += this.ebookFile.metadata.size
     }
     return total
+  }
+
+  /**
+   * The values of toOldJSONMinified that need audioFiles and chapters
+   *
+   * @returns {{numTracks: number, numAudioFiles: number, numChapters: number, size: number}}
+   */
+  getMinifiedStats() {
+    return {
+      numTracks: this.includedAudioFiles.length,
+      numAudioFiles: this.audioFiles?.length || 0,
+      numChapters: this.chapters?.length || 0,
+      size: this.size
+    }
   }
 
   getAbsMetadataJson() {
@@ -666,16 +682,18 @@ class Book extends Model {
       throw new Error(`[Book] Cannot convert to old JSON because series are not loaded`)
     }
 
+    const stats = this.minifiedStats || this.getMinifiedStats()
+
     return {
       id: this.id,
       metadata: this.oldMetadataToJSONMinified(),
       coverPath: this.coverPath,
       tags: [...(this.tags || [])],
-      numTracks: this.includedAudioFiles.length,
-      numAudioFiles: this.audioFiles?.length || 0,
-      numChapters: this.chapters?.length || 0,
+      numTracks: stats.numTracks,
+      numAudioFiles: stats.numAudioFiles,
+      numChapters: stats.numChapters,
       duration: this.duration,
-      size: this.size,
+      size: stats.size,
       ebookFormat: this.ebookFile?.ebookFormat
     }
   }

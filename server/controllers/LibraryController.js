@@ -832,7 +832,7 @@ class LibraryController {
     }
 
     // TODO: Create paginated queries
-    let collections = await Database.collectionModel.getOldCollectionsJsonExpanded(req.user, req.library.id, include)
+    let collections = await Database.collectionModel.getOldCollectionsJsonExpanded(req.user, req.library.id, include, Database.readQueryOptions)
 
     payload.total = collections.length
 
@@ -1055,6 +1055,7 @@ class LibraryController {
 
     const { bookWhere, replacements } = libraryItemsBookFilters.getUserPermissionBookWhereQuery(req.user)
     const { rows: authors, count } = await Database.authorModel.findAndCountAll({
+      ...Database.readQueryOptions,
       where: {
         libraryId: req.library.id
       },
@@ -1112,6 +1113,7 @@ class LibraryController {
   async getNarrators(req, res) {
     // Get all books with narrators
     const booksWithNarrators = await Database.bookModel.findAll({
+      ...Database.readQueryOptions,
       where: Sequelize.where(Sequelize.fn('json_array_length', Sequelize.col('narrators')), {
         [Sequelize.Op.gt]: 0
       }),

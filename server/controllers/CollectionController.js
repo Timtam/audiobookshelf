@@ -108,7 +108,7 @@ class CollectionController {
    * @param {Response} res
    */
   async findAll(req, res) {
-    const collectionsExpanded = await Database.collectionModel.getOldCollectionsJsonExpanded(req.user)
+    const collectionsExpanded = await Database.collectionModel.getOldCollectionsJsonExpanded(req.user, null, null, Database.readQueryOptions)
     const accessibleCollections = collectionsExpanded.filter((c) => req.user.checkCanAccessLibrary(c.libraryId))
     res.json({
       collections: accessibleCollections
