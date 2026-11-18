@@ -22,11 +22,6 @@ class AbMergeManager {
 
     /** @type {Task[]} */
     this.pendingTasks = []
-
-    // An encode keeps the CPU and the disks busy for a long time
-    this.MAX_CONCURRENT_TASKS = 1
-    this.tasksRunning = []
-    this.tasksQueued = []
   }
 
   /**
@@ -103,19 +98,7 @@ class AbMergeManager {
       await fs.mkdir(taskData.itemCachePath)
     }
 
-    // Added here so that a queued task is found and can be canceled
-    this.pendingTasks.push({
-      id: task.id,
-      task
-    })
-
-    if (this.tasksRunning.length >= this.MAX_CONCURRENT_TASKS) {
-      Logger.info(`[AbMergeManager] Queueing m4b encode for ${libraryItem.id}`)
-      this.tasksQueued.push({ libraryItem, task, encodingOptions: options || {} })
-    } else {
-      this.tasksRunning.push(task)
-      this.runAudiobookMerge(libraryItem, task, options || {})
-    }
+    this.runAudiobookMerge(libraryItem, task, options || {})
   }
 
   /**
@@ -148,6 +131,11 @@ class AbMergeManager {
       this.removeTask(task, true)
       return
     }
+
+    this.pendingTasks.push({
+      id: task.id,
+      task
+    })
 
     try {
       const trackProgressMonitor = new TrackProgressMonitor(
@@ -275,15 +263,6 @@ class AbMergeManager {
     }
 
     TaskManager.taskFinished(task)
-
-    this.tasksRunning = this.tasksRunning.filter((t) => t.id !== task.id)
-    this.tasksQueued = this.tasksQueued.filter((queued) => queued.task.id !== task.id)
-    if (this.tasksRunning.length < this.MAX_CONCURRENT_TASKS && this.tasksQueued.length) {
-      Logger.info(`[AbMergeManager] Task finished and dequeueing next task. ${this.tasksQueued.length} tasks queued.`)
-      const nextTask = this.tasksQueued.shift()
-      this.tasksRunning.push(nextTask.task)
-      this.runAudiobookMerge(nextTask.libraryItem, nextTask.task, nextTask.encodingOptions)
-    }
   }
 }
 module.exports = AbMergeManager

@@ -66,46 +66,6 @@ describe('AbMergeManager', () => {
     await fs.remove(tempDir)
   })
 
-  describe('startAudiobookMerge', () => {
-    let runAudiobookMergeStub = null
-    let libraryItem1 = null
-    let libraryItem2 = null
-
-    beforeEach(async () => {
-      runAudiobookMergeStub = sinon.stub(abMergeManager, 'runAudiobookMerge').resolves()
-      libraryItem1 = createLibraryItem('Book 1')
-      libraryItem2 = createLibraryItem('Book 2')
-      await abMergeManager.startAudiobookMerge('user1', libraryItem1)
-      await abMergeManager.startAudiobookMerge('user1', libraryItem2)
-    })
-
-    it('should run one encode at a time and queue the others', () => {
-      expect(runAudiobookMergeStub.calledOnce).to.be.true
-      expect(runAudiobookMergeStub.firstCall.args[0]).to.equal(libraryItem1)
-      expect(abMergeManager.tasksQueued).to.have.length(1)
-      // A queued encode is a pending task, so that it cannot be started twice and can be canceled
-      expect(abMergeManager.getPendingTaskByLibraryItemId(libraryItem2.id)).to.exist
-    })
-
-    it('should run the next queued encode when a task is removed', async () => {
-      await abMergeManager.removeTask(abMergeManager.getPendingTaskByLibraryItemId(libraryItem1.id).task)
-
-      expect(runAudiobookMergeStub.calledTwice).to.be.true
-      expect(runAudiobookMergeStub.secondCall.args[0]).to.equal(libraryItem2)
-      expect(abMergeManager.tasksQueued).to.have.length(0)
-    })
-
-    it('should not run a queued encode that was canceled', async () => {
-      const queuedTask = abMergeManager.getPendingTaskByLibraryItemId(libraryItem2.id).task
-      await abMergeManager.cancelEncode(queuedTask)
-      await abMergeManager.removeTask(abMergeManager.getPendingTaskByLibraryItemId(libraryItem1.id).task)
-
-      expect(queuedTask.isFailed).to.be.true
-      expect(runAudiobookMergeStub.calledOnce).to.be.true
-      expect(abMergeManager.pendingTasks).to.have.length(0)
-    })
-  })
-
   describe('runAudiobookMerge', () => {
     it('should embed metadata and cover in the encode run and move the m4b to the library item folder', async () => {
       const mergeAudioFilesStub = sinon.stub(ffmpegHelpers, 'mergeAudioFiles').callsFake(async (audioTracks, duration, itemCachePath, outputFilePath) => {
@@ -130,7 +90,6 @@ describe('AbMergeManager', () => {
       expect(nodeFs.readFileSync(Path.join(libraryItem.path, 'Book 1.m4b'), 'utf8')).to.equal('encoded m4b')
       expect(nodeFs.readdirSync(itemCachePath).sort()).to.deep.equal(['01.mp3', '02.mp3'])
       expect(abMergeManager.pendingTasks).to.have.length(0)
-      expect(abMergeManager.tasksRunning).to.have.length(0)
     })
   })
 })
